@@ -89,3 +89,6 @@ om-reflector-fixture.json
 
 # Local git worktrees (scratch checkouts; never part of a commit)
 .worktrees/
+
+# Local tarballs for downstream testing
+fork-packs/
