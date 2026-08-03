@@ -1,5 +1,5 @@
 {
-  "name": "@mastra/inngest",
+  "name": "@cchevli/inngest",
   "version": "1.8.4-alpha.1",
   "description": "Mastra Inngest integration",
   "type": "module",
@@ -55,7 +55,6 @@
     "@internal/types-builder": "workspace:*",
     "@internal/workflow-test-utils": "workspace:*",
     "@koa/router": "^13.1.1",
-    "@mastra/core": "workspace:*",
     "@mastra/deployer": "workspace:*",
     "@mastra/libsql": "workspace:*",
     "@mastra/observability": "workspace:*",
