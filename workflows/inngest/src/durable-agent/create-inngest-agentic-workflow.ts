@@ -155,6 +155,9 @@ export function createInngestDurableAgenticWorkflow(options: InngestDurableAgent
           modelSpanData: state.modelSpanData,
           // Pass step index for continuation (step: 0, 1, 2, ...)
           stepIndex: state.stepIndex,
+          // Forward the serialized request context so the LLM step's runtime
+          // rebuild can hydrate dynamic model/tool resolvers cross-isolate.
+          requestContextEntries: state.requestContextEntries,
         };
       },
       { id: 'map-to-llm-input' },
