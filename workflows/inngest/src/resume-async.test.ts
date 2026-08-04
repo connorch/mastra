@@ -114,6 +114,20 @@ describe('InngestRun.resumeAsync()', () => {
     expect(sentEvent.data.resume.resumePayload).toEqual({ resumed: 'world' });
   });
 
+  it('ships state by reference: no stepResults/initialState copies in the resume event', async () => {
+    const { run } = await createSuspendedRun();
+
+    await run.resumeAsync({ step: 'step1', resumeData: { resumed: 'world' } });
+
+    const sentEvent = sendMock.mock.calls[0][0];
+    // The suspended snapshot already lives in the workflow's own storage; the
+    // handler rehydrates it by runId. Copying it into the event would grow the
+    // payload with accumulated state and hit Inngest's event size limit.
+    expect(sentEvent.data.stepResults).toBeUndefined();
+    expect(sentEvent.data.initialState).toBeUndefined();
+    expect(sentEvent.data.resume.stepResults).toBeUndefined();
+  });
+
   it('updates the snapshot to running before sending the event', async () => {
     const { run, workflowsStore } = await createSuspendedRun();
 

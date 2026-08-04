@@ -368,6 +368,28 @@ export class InngestWorkflow<
 
         // Store mastra reference for use in proxy closure
         const mastra = this.#mastra;
+
+        // Resume events ship no stepResults/initialState copies (see
+        // `_resumeAndSendEvent` / `executeWorkflowStep`) — rehydrate them from
+        // this workflow's own persisted snapshot so multi-MB suspended state
+        // never rides through Inngest payload limits. Deliberately NOT inside a
+        // step.run: as a step output the snapshot would hit the per-step size
+        // limit this exists to avoid, and executeWorkflowStep already re-reads
+        // snapshots per replay on this same resume path. Old-style events that
+        // still carry stepResults keep their shipped copy.
+        if (resume && resume.stepResults == null) {
+          const workflowsStore = await mastra?.getStorage()?.getStore('workflows');
+          const hydrationSnapshot = await workflowsStore?.loadWorkflowSnapshot({
+            workflowName: this.id,
+            runId,
+          });
+          if (!hydrationSnapshot) {
+            throw new NonRetriableError(`Cannot resume run ${runId}: snapshot not found for rehydration`);
+          }
+          resume = { ...resume, stepResults: hydrationSnapshot.context as any };
+          initialState = initialState ?? (hydrationSnapshot.value as any) ?? {};
+        }
+
         const tracingPolicy = this.options.tracingPolicy;
 
         // Create the workflow root span durably - exports SPAN_STARTED immediately on first execution
