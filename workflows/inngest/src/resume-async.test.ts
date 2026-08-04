@@ -108,7 +108,7 @@ describe('InngestRun.resumeAsync()', () => {
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     const sentEvent = sendMock.mock.calls[0][0];
-    expect(sentEvent.name).toBe('workflow.resume-async-wf');
+    expect(sentEvent.name).toBe('mastra-test.workflow.resume-async-wf');
     expect(sentEvent.data.runId).toBe(run.runId);
     expect(sentEvent.data.resume.steps).toEqual(['step1']);
     expect(sentEvent.data.resume.resumePayload).toEqual({ resumed: 'world' });

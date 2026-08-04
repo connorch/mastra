@@ -22,6 +22,7 @@ import type {
 import { NonRetriableError } from 'inngest';
 import type { Inngest } from 'inngest';
 import { subscribe } from 'inngest/realtime';
+import { workflowCancelEventName, workflowEventName } from './event-names';
 import type { InngestEngineType } from './types';
 
 export class InngestRun<
@@ -264,7 +265,7 @@ export class InngestRun<
     const storage = this.#mastra?.getStorage();
 
     await this.inngest.send({
-      name: `cancel.workflow.${this.workflowId}`,
+      name: workflowCancelEventName(this.inngest, this.workflowId),
       data: {
         runId: this.runId,
       },
@@ -377,7 +378,7 @@ export class InngestRun<
 
     // Send event to Inngest (fire-and-forget)
     const eventOutput = await this.inngest.send({
-      name: `workflow.${this.workflowId}`,
+      name: workflowEventName(this.inngest, this.workflowId),
       data: {
         inputData: inputDataToUse,
         initialState: initialStateToUse,
@@ -445,7 +446,7 @@ export class InngestRun<
     const inputDataToUse = await this._validateInput(inputData);
     const initialStateToUse = await this._validateInitialState(initialState ?? ({} as TState));
 
-    const eventName = `workflow.${this.workflowId}`;
+    const eventName = workflowEventName(this.inngest, this.workflowId);
 
     const eventOutput = await this.inngest.send({
       name: eventName,
@@ -584,7 +585,7 @@ export class InngestRun<
     let eventOutput;
     try {
       eventOutput = await this.inngest.send({
-        name: `workflow.${this.workflowId}`,
+        name: workflowEventName(this.inngest, this.workflowId),
         data: {
           inputData: resumeDataToUse,
           runId: this.runId,
@@ -839,7 +840,7 @@ export class InngestRun<
     let eventOutput;
     try {
       eventOutput = await this.inngest.send({
-        name: `workflow.${this.workflowId}`,
+        name: workflowEventName(this.inngest, this.workflowId),
         data: {
           initialState: timeTravelData.state,
           runId: this.runId,

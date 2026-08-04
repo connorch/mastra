@@ -18,6 +18,7 @@ import type {
 } from '@mastra/core/workflows';
 import { NonRetriableError } from 'inngest';
 import type { Inngest } from 'inngest';
+import { workflowCancelEventName, workflowEventName } from './event-names';
 import { InngestExecutionEngine } from './execution-engine';
 import {
   compactNestedWorkflowResult,
@@ -281,7 +282,7 @@ export class InngestWorkflow<
       {
         id: `workflow.${this.id}.cron`,
         retries: 0,
-        cancelOn: [{ event: `cancel.workflow.${this.id}` }],
+        cancelOn: [{ event: workflowCancelEventName(this.inngest, this.id) }],
         triggers: { cron: this.cronConfig?.cron ?? '' },
         ...this.flowControlConfig,
       },
@@ -316,8 +317,8 @@ export class InngestWorkflow<
       {
         id: `workflow.${this.id}`,
         retries: 0,
-        cancelOn: [{ event: `cancel.workflow.${this.id}` }],
-        triggers: { event: `workflow.${this.id}` },
+        cancelOn: [{ event: workflowCancelEventName(this.inngest, this.id) }],
+        triggers: { event: workflowEventName(this.inngest, this.id) },
         // Spread flow control configuration
         ...this.flowControlConfig,
       },
