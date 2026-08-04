@@ -15,8 +15,7 @@
 
 import type { Mastra } from '@mastra/core/mastra';
 import { Inngest } from 'inngest';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { InngestRun } from './run';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 const harness = vi.hoisted(() => {
   class MockFanout {
@@ -128,6 +127,17 @@ const harness = vi.hoisted(() => {
 vi.mock('inngest/realtime', () => ({ subscribe: harness.subscribe }));
 
 const flush = async (ms = 25) => new Promise(resolve => setTimeout(resolve, ms));
+
+// The suite runs with --no-isolate, so another test file may already have
+// loaded './run' with the REAL 'inngest/realtime' in the shared module
+// registry - in which case the vi.mock above would never apply. Reset the
+// registry and re-import the subject so its 'inngest/realtime' binding
+// resolves to the mock regardless of file execution order.
+let InngestRun: typeof import('./run').InngestRun;
+beforeAll(async () => {
+  vi.resetModules();
+  ({ InngestRun } = await import('./run'));
+});
 
 function createRun() {
   const workflowsStore = {

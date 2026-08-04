@@ -18,8 +18,7 @@
  */
 
 import { Inngest } from 'inngest';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { InngestPubSub } from './pubsub';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 const harness = vi.hoisted(() => {
   /**
@@ -143,7 +142,18 @@ vi.mock('inngest/realtime', () => ({ subscribe: harness.subscribe }));
 const flush = async (ms = 20) => new Promise(resolve => setTimeout(resolve, ms));
 
 describe('InngestPubSub subscription retention', () => {
-  let pubsub: InngestPubSub;
+  // The suite runs with --no-isolate, so another test file may already have
+  // loaded './pubsub' with the REAL 'inngest/realtime' in the shared module
+  // registry - in which case the vi.mock above would never apply. Reset the
+  // registry and re-import the subject so its 'inngest/realtime' binding
+  // resolves to the mock regardless of file execution order.
+  let InngestPubSub: typeof import('./pubsub').InngestPubSub;
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ InngestPubSub } = await import('./pubsub'));
+  });
+
+  let pubsub: InstanceType<typeof InngestPubSub>;
 
   beforeEach(() => {
     harness.state.subscriptions.length = 0;
