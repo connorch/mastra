@@ -140,6 +140,12 @@ export async function executeStep(
   // from `__workflow_meta.foreachOutput` so parallel suspensions don't read a sibling's data
   // (e.g. another tool call's suspended run id).
   const foreachIndex = executionContext.foreachIndex;
+  // Parallel foreach iterations execute this same step concurrently, so every
+  // durable operation id below must carry the iteration index: durable engines
+  // (Inngest) memoize and schedule operations BY id, and colliding ids across
+  // parallel chains cross-wire or stall the run nondeterministically. The
+  // index is stable across retries and resumes, keeping memoization intact.
+  const stepInstanceId = foreachIndex === undefined ? step.id : `${step.id}[${foreachIndex}]`;
   if (suspendDataToUse && foreachIndex !== undefined) {
     const iterationResult = suspendDataToUse.__workflow_meta?.foreachOutput?.[foreachIndex];
     if (iterationResult?.status === 'suspended' && iterationResult.suspendPayload) {
@@ -170,7 +176,7 @@ export async function executeStep(
   const stepSpan = await engine.createStepSpan({
     parentSpan: observabilityContext.tracingContext.currentSpan,
     stepId: step.id,
-    operationId: `workflow.${workflowId}.run.${runId}.step.${step.id}.span.start`,
+    operationId: `workflow.${workflowId}.run.${runId}.step.${stepInstanceId}.span.start`,
     options: {
       name: `workflow step: '${step.id}'`,
       type: SpanType.WORKFLOW_STEP,
@@ -183,7 +189,7 @@ export async function executeStep(
     executionContext,
   });
 
-  const operationId = `workflow.${workflowId}.run.${runId}.step.${step.id}.running_ev`;
+  const operationId = `workflow.${workflowId}.run.${runId}.step.${stepInstanceId}.running_ev`;
   await engine.onStepExecutionStart({
     step,
     inputData,
@@ -238,7 +244,7 @@ export async function executeStep(
         if (workflowResult.status === 'failed') {
           await engine.errorStepSpan({
             span: stepSpan as Span<SpanType.WORKFLOW_STEP>,
-            operationId: `workflow.${workflowId}.run.${runId}.step.${step.id}.span.error`,
+            operationId: `workflow.${workflowId}.run.${runId}.step.${stepInstanceId}.span.error`,
             errorOptions: {
               error:
                 workflowResult.error instanceof Error ? workflowResult.error : new Error(String(workflowResult.error)),
@@ -253,7 +259,7 @@ export async function executeStep(
 
           await engine.endStepSpan({
             span: stepSpan as Span<SpanType.WORKFLOW_STEP>,
-            operationId: `workflow.${workflowId}.run.${runId}.step.${step.id}.span.end`,
+            operationId: `workflow.${workflowId}.run.${runId}.step.${stepInstanceId}.span.end`,
             endOptions: {
               output,
               attributes: { status: workflowResult.status },
@@ -297,7 +303,7 @@ export async function executeStep(
   // Default engine: internal retry loop
   // Inngest engine: throws RetryAfterError for external retry handling
   const stepRetryResult = await engine.executeStepWithRetry(
-    `workflow.${workflowId}.step.${step.id}`,
+    `workflow.${workflowId}.step.${stepInstanceId}`,
     async () => {
       if (validationError) {
         throw validationError;
@@ -511,7 +517,7 @@ export async function executeStep(
   delete executionContext.activeStepsPath[step.id];
 
   if (!skipEmits) {
-    const emitOperationId = `workflow.${workflowId}.run.${runId}.step.${step.id}.emit_result`;
+    const emitOperationId = `workflow.${workflowId}.run.${runId}.step.${stepInstanceId}.emit_result`;
     await engine.wrapDurableOperation(emitOperationId, async () => {
       await emitStepResultEvents({
         stepId: step.id,
@@ -526,7 +532,7 @@ export async function executeStep(
   if (execResults.status != 'failed') {
     await engine.endStepSpan({
       span: stepSpan,
-      operationId: `workflow.${workflowId}.run.${runId}.step.${step.id}.span.end`,
+      operationId: `workflow.${workflowId}.run.${runId}.step.${stepInstanceId}.span.end`,
       endOptions: {
         output: execResults.output,
         attributes: {
