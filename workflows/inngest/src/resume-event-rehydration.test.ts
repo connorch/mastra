@@ -96,7 +96,7 @@ describe('resume event snapshot rehydration', () => {
     // Dispatch the resume through the real client path, capturing the event.
     await run.resumeAsync({ step: 'step1', resumeData: { resumed: 'world' } });
     const resumeEvent = sendMock.mock.calls.at(-1)![0];
-    expect(resumeEvent.name).toBe('workflow.resume-rehydration-wf');
+    expect(resumeEvent.name).toBe('resume-rehydration-test.workflow.resume-rehydration-wf');
     expect(resumeEvent.data.stepResults).toBeUndefined();
     expect(resumeEvent.data.initialState).toBeUndefined();
     expect(resumeEvent.data.resume.stepResults).toBeUndefined();
