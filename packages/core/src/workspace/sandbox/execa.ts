@@ -1,13 +1,15 @@
 import type { execa as execaType } from 'execa';
 
+import { importExternal } from '../import-external';
+
 let cached: typeof execaType | undefined;
 let loading: Promise<typeof execaType> | undefined;
 
 /**
- * Lazily imports execa using a runtime-constructed module specifier.
- * This prevents bundlers (Vite/Rollup/esbuild) from resolving execa at build time,
- * which is necessary for Cloudflare Workers where execa's transitive deps
- * (npm-run-path → unicorn-magic) use Node-only conditional exports.
+ * Lazily imports execa through {@link importExternal}, which keeps the module specifier
+ * opaque to bundlers. This prevents bundlers (Vite/Rollup/esbuild) from resolving execa at
+ * build time, which is necessary for Cloudflare Workers where execa's transitive deps
+ * (npm-run-path -> unicorn-magic) use Node-only conditional exports.
  */
 export async function getExeca(): Promise<typeof execaType> {
   if (cached) {
@@ -16,8 +18,7 @@ export async function getExeca(): Promise<typeof execaType> {
   if (!loading) {
     loading = (async () => {
       try {
-        const mod = 'execa';
-        const execa = (await import(/* @vite-ignore */ /* webpackIgnore: true */ mod)).execa;
+        const { execa } = await importExternal<typeof import('execa')>('execa');
         cached = execa;
         return execa;
       } catch (err) {
