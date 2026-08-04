@@ -9,6 +9,73 @@ const { default: treeshakeDecoratorsBabelPlugin } = await import(
   new URL('./tools/treeshake-decorators.js', import.meta.url).href
 );
 
+/**
+ * Node-only optional dependencies that must never appear as a literal specifier in a dynamic
+ * `import()` in dist. Downstream bundlers (Vite/Rollup, esbuild's dep optimizer, wrangler)
+ * follow literal specifiers even inside never-executed branches, which breaks builds of apps
+ * that merely import `@mastra/core/agent`. `src/workspace/import-external.ts` keeps these
+ * specifiers behind a function parameter so rolldown cannot constant-fold them; this check
+ * fails the build if that ever stops working.
+ *
+ * Deliberately a deny-list rather than "any @vite-ignore'd literal": `src/channels/chat-lazy.ts`
+ * needs its literal specifier so serverless bundlers *do* bundle the `chat` package (#19254).
+ */
+const OPAQUE_DYNAMIC_IMPORTS = ['execa', '@ast-grep/napi'];
+
+/**
+ * Matches `import(` followed by any interleaved comments (rolldown emits the `@vite-ignore` /
+ * `webpackIgnore` hints on their own lines) and then a string-literal specifier.
+ */
+const LITERAL_DYNAMIC_IMPORT = /\bimport\(\s*(?:(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*)\s*)*(['"])([^'"]+)\1/g;
+
+/** True when the match starts on a comment line, e.g. a doc comment that mentions the pattern. */
+function isInsideComment(code: string, index: number): boolean {
+  const lineStart = code.lastIndexOf('\n', index) + 1;
+  const linePrefix = code.slice(lineStart, index).trimStart();
+  return linePrefix.startsWith('*') || linePrefix.startsWith('//') || linePrefix.startsWith('/*');
+}
+
+function collectBundleFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectBundleFiles(full, out);
+    } else if (entry.name.endsWith('.js') || entry.name.endsWith('.cjs')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+function assertOpaqueDynamicImports(distDir: string) {
+  if (!fs.existsSync(distDir)) {
+    return;
+  }
+
+  const violations: string[] = [];
+  for (const file of collectBundleFiles(distDir)) {
+    const code = fs.readFileSync(file, 'utf-8');
+    for (const match of code.matchAll(LITERAL_DYNAMIC_IMPORT)) {
+      if (OPAQUE_DYNAMIC_IMPORTS.includes(match[2]!) && !isInsideComment(code, match.index)) {
+        const line = code.slice(0, match.index).split('\n').length;
+        violations.push(`${path.relative(process.cwd(), file)}:${line} -> import("${match[2]}")`);
+      }
+    }
+  }
+
+  if (violations.length > 0) {
+    throw new Error(
+      `Node-only dependencies leaked into dist as literal dynamic imports:\n` +
+        violations.map(v => `  ${v}`).join('\n') +
+        `\n\nThese specifiers must stay opaque to downstream bundlers. Import them through ` +
+        `importExternal() from src/workspace/import-external.ts, and check that the bundler is ` +
+        `not constant-folding the specifier into the import() call.`,
+    );
+  }
+
+  console.info(`✓ No literal dynamic imports of ${OPAQUE_DYNAMIC_IMPORTS.join(', ')} in dist/`);
+}
+
 const treeshakeDecorators = {
   name: 'treeshake-decorators',
   renderChunk(code: string, chunk: { fileName: string }) {
@@ -103,6 +170,8 @@ export default defineConfig({
     ],
   },
   onSuccess: async () => {
+    assertOpaqueDynamicImports(path.join(process.cwd(), 'dist'));
+
     await new Promise(resolve => setTimeout(resolve, 1000));
     await generateTypes(
       process.cwd(),
