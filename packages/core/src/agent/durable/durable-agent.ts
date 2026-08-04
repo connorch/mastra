@@ -21,7 +21,7 @@ import { SaveQueueManager } from '../save-queue';
 import { agentThreadStreamRuntime } from '../thread-stream-runtime';
 import type { ToolsInput } from '../types';
 
-import { AGENT_STREAM_TOPIC, DurableStepIds } from './constants';
+import { AGENT_STREAM_TOPIC, DurableStepIds, isAgentStreamTopic } from './constants';
 import { runDurableStreamUntilIdle, runResumeDurableStreamUntilIdle } from './durable-stream-until-idle';
 import { prepareForDurableExecution } from './preparation';
 import { endRunSpansWithError, ExtendedRunRegistry, globalRunRegistry } from './run-registry';
@@ -530,7 +530,12 @@ export class DurableAgent<
       // Resolve cache: user-provided > mastra's cache > default InMemoryServerCache
       const resolvedCache = this.#cacheConfig ?? this.#mastra?.serverCache ?? new InMemoryServerCache();
       this.#resolvedCache = resolvedCache;
-      this.#cachingPubsub = new CachingPubSub(this.#innerPubsub, resolvedCache);
+      // Only agent-stream topics are ever replayed from cache (observe()
+      // reconnects, subscribeWithReplay). The durable workflow also publishes
+      // its watch events (`workflow.events.v2.*`) through this pubsub - those
+      // can be megabytes per event and have no history reader, so caching them
+      // retains the whole run's worth of payloads for the cache TTL.
+      this.#cachingPubsub = new CachingPubSub(this.#innerPubsub, resolvedCache, { shouldCache: isAgentStreamTopic });
     }
   }
 

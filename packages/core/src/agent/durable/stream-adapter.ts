@@ -639,16 +639,25 @@ export async function emitChunkEvent<OUTPUT = undefined>(
  * Helper to emit a step start event to pubsub.
  * The `data` payload must include `type: 'step-start'` so the stream-adapter
  * consumer recognises it as a `ChunkType` and enqueues it onto the client stream.
+ *
+ * `request` is accepted for signature compatibility but never shipped: it is
+ * the full model request body (system prompt + entire message history + tool
+ * definitions, growing every iteration - easily 100 KB+ per step). Nothing
+ * consumes it from durable stream events, yet it would travel over the pubsub
+ * transport and be retained in every consumer's replay buffer for the life of
+ * the run. The emitted chunk keeps `request: {}` so its shape still matches
+ * `StepStartPayload`.
  */
 export async function emitStepStartEvent(
   pubsub: PubSub,
   runId: string,
   data: { stepId?: string; request?: unknown; warnings?: unknown[] },
 ): Promise<void> {
+  const { request: _request, ...rest } = data;
   await pubsub.publish(AGENT_STREAM_TOPIC(runId), {
     type: AgentStreamEventTypes.STEP_START,
     runId,
-    data: { type: 'step-start', ...data },
+    data: { type: 'step-start', ...rest, request: {} },
   });
 }
 

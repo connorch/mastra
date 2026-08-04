@@ -9,11 +9,26 @@
 export const RUN_REGISTRY_SYMBOL = Symbol('run_registry');
 
 /**
+ * Prefix shared by all agent stream topics. Use {@link isAgentStreamTopic}
+ * to test membership.
+ */
+export const AGENT_STREAM_TOPIC_PREFIX = 'agent.stream.';
+
+/**
  * Generate the pubsub topic name for agent streaming events
  * @param runId - The unique run identifier
  * @returns The topic name for subscribing/publishing agent stream events
  */
-export const AGENT_STREAM_TOPIC = (runId: string): string => `agent.stream.${runId}`;
+export const AGENT_STREAM_TOPIC = (runId: string): string => `${AGENT_STREAM_TOPIC_PREFIX}${runId}`;
+
+/**
+ * Whether a pubsub topic carries agent stream events. Agent stream topics are
+ * the only ones replayed from `CachingPubSub` history (`observe()` reconnects,
+ * `subscribeWithReplay`), so durable-agent pubsub wrappers use this as their
+ * cache predicate: everything else (e.g. multi-megabyte workflow watch events)
+ * is delivered live-only instead of being retained in the cache with no reader.
+ */
+export const isAgentStreamTopic = (topic: string): boolean => topic.startsWith(AGENT_STREAM_TOPIC_PREFIX);
 
 /**
  * Event type constants for agent stream events

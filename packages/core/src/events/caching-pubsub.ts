@@ -18,6 +18,20 @@ export interface CachingPubSubOptions {
    * Falls back to console.error if not provided.
    */
   logger?: IMastraLogger;
+  /**
+   * Optional predicate deciding whether events published to a topic are
+   * cached for replay. Topics that return `false` skip the cache entirely
+   * (no index counter, no history) and publish straight to the inner PubSub;
+   * live subscribe/unsubscribe are unaffected, but `getHistory()` and the
+   * replay phase of `subscribeWithReplay`/`subscribeFromOffset` return
+   * nothing for them.
+   *
+   * Use this when a wrapped pubsub carries both replayable topics and
+   * high-volume live-only topics (e.g. workflow watch events, which can be
+   * megabytes per event): caching the live-only topics retains every event
+   * in the cache for the TTL with no reader. Defaults to caching everything.
+   */
+  shouldCache?: (topic: string) => boolean;
 }
 
 /**
@@ -56,6 +70,7 @@ export interface CachingPubSubOptions {
 export class CachingPubSub extends PubSub {
   private readonly keyPrefix: string;
   private readonly logger?: IMastraLogger;
+  private readonly shouldCache?: (topic: string) => boolean;
   /** Maps original callbacks to their wrapped versions for proper unsubscribe */
   private callbackMap = new Map<EventCallback, EventCallback>();
 
@@ -67,6 +82,7 @@ export class CachingPubSub extends PubSub {
     super();
     this.keyPrefix = options.keyPrefix ?? 'pubsub:';
     this.logger = options.logger;
+    this.shouldCache = options.shouldCache;
   }
 
   get supportsNativeBatching(): boolean {
@@ -127,6 +143,15 @@ export class CachingPubSub extends PubSub {
     event: Omit<Event, 'id' | 'createdAt' | 'index'>,
     options?: { localOnly?: boolean },
   ): Promise<void> {
+    if (this.shouldCache && !this.shouldCache(topic)) {
+      // Live-only topic: no counter, no cached history - straight to the inner
+      // transport. Uncached events carry no `index`, matching the
+      // counter-failure path below, so replay/offset consumers ignore them.
+      const liveEvent: Event = { ...event, id: crypto.randomUUID(), createdAt: new Date() };
+      await this.inner.publish(topic, liveEvent, options);
+      return;
+    }
+
     const cacheKey = this.getCacheKey(topic);
     const counterKey = this.getCounterKey(topic);
 

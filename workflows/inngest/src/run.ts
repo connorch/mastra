@@ -159,12 +159,30 @@ export class InngestRun<
             },
           );
 
-          // Set unsubscribe immediately so cleanup can cancel even before await resolves
+          // Set unsubscribe immediately so cleanup can cancel even before await resolves.
+          // close() tears down the whole WebSocket subscription; a plain cancel()
+          // on the returned stream would leave the socket open (and receiving
+          // watch events) for the rest of the process lifetime.
           unsubscribe = () => {
-            realtimeStreamPromise?.then(stream => stream.cancel().catch(() => {})).catch(() => {});
+            realtimeStreamPromise
+              ?.then(stream => {
+                try {
+                  stream.close('run output resolved');
+                } catch {
+                  // Ignore close errors
+                }
+              })
+              .catch(() => {});
           };
 
-          await realtimeStreamPromise;
+          const subscription = await realtimeStreamPromise;
+          // The SDK delivers messages to the callback via its own internal
+          // stream AND fans them out to this returned stream. Nothing reads the
+          // returned stream, so without cancelling it every `watch` event on the
+          // workflow channel (full step payloads, MBs each on large runs) is
+          // retained in its write queue until the subscription closes. cancel()
+          // detaches only this unread branch; callback delivery continues.
+          void Promise.resolve(subscription.cancel()).catch(() => {});
         } catch {
           // Realtime subscription failed - polling will still work as fallback
         }
