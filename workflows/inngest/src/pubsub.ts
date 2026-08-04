@@ -37,6 +37,64 @@ function parseTopic(topic: string): { runId: string; topicType: 'workflow' | 'ag
   return null;
 }
 
+// Inngest Realtime caps message size (~512 KB on both the dev server and
+// Inngest Cloud), and an oversized publish is DELIVERED TRUNCATED as a raw
+// string subscribers cannot parse. A truncated terminal event leaves every
+// attached durable stream open forever (streams only close on
+// finish/error/abort), so past a soft limit slim the LIVE copy of the
+// known-huge lifecycle events down to what stream consumers need to render
+// and terminate correctly:
+// - `finish`: drop `output.steps`, the unbounded per-step accumulator (each
+//   entry carries full tool results and model content). If the event is
+//   still over the limit on accumulated text alone, drop `output.text` too —
+//   `output.usage` and `stepResult` (whose `reason` closes the stream and
+//   routes abort/error callbacks) always survive.
+// - `step-start`: blank `request`, the full model request body, which grows
+//   with the message history every iteration.
+// The CachingPubSub cache is written before this publish and keeps the full
+// event for replays.
+const REALTIME_AGENT_EVENT_SOFT_LIMIT_CHARS = 400_000;
+
+function serializedLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    // Unserializable events fail at the transport layer anyway; don't slim.
+    return 0;
+  }
+}
+
+function slimOversizedAgentEvent(event: Omit<Event, 'id' | 'createdAt'>): Omit<Event, 'id' | 'createdAt'> {
+  if (serializedLength(event) <= REALTIME_AGENT_EVENT_SOFT_LIMIT_CHARS) {
+    return event;
+  }
+  if (event.type === 'finish') {
+    const data = event.data as
+      | { output?: { text?: string; usage?: unknown; steps?: unknown[] }; stepResult?: unknown }
+      | undefined;
+    const slimmed = {
+      ...event,
+      data: {
+        output: { text: data?.output?.text, usage: data?.output?.usage, steps: [] },
+        stepResult: data?.stepResult,
+      },
+    };
+    if (serializedLength(slimmed) <= REALTIME_AGENT_EVENT_SOFT_LIMIT_CHARS) {
+      return slimmed;
+    }
+    return {
+      ...slimmed,
+      data: { ...slimmed.data, output: { usage: data?.output?.usage, steps: [] } },
+    };
+  }
+  if (event.type === 'step-start') {
+    const { request: _request, ...rest } = (event.data ?? {}) as Record<string, unknown>;
+    // Keep `request: {}` so the chunk shape still matches StepStartPayload.
+    return { ...event, data: { ...rest, request: {} } };
+  }
+  return event;
+}
+
 /**
  * PubSub implementation for Inngest workflows.
  *
@@ -95,7 +153,7 @@ export class InngestPubSub extends PubSub {
     try {
       // For agent stream events, send the full event structure so subscribers can access type/runId/data
       // For workflow events, send just the data (existing behavior)
-      const dataToSend = topicType === 'agent' ? event : event.data;
+      const dataToSend = topicType === 'agent' ? slimOversizedAgentEvent(event) : event.data;
       await this.inngest.realtime.publish(buildTopicRef(channel, inngestTopic), dataToSend);
     } catch (err: any) {
       // For agent stream terminal events, rethrow — losing a finish/error event
@@ -149,6 +207,48 @@ export class InngestPubSub extends PubSub {
         app: this.inngest,
       },
       (message: any) => {
+        // A message over the realtime size cap arrives truncated as a raw
+        // JSON string. Salvage terminal events into minimal envelopes so
+        // attached streams still close (`type` and `runId` serialize first,
+        // inside the surviving head; the real payload is lost in the
+        // truncated tail); drop everything else — the CachingPubSub cache
+        // carries the full copy for replays.
+        if (topicType === 'agent' && typeof message.data === 'string') {
+          const head = message.data.slice(0, 4096);
+          const salvagedType = /"type"\s*:\s*"([^"]+)"/.exec(head)?.[1];
+          const salvagedRunId = /"runId"\s*:\s*"([^"]+)"/.exec(head)?.[1];
+          console.warn(`InngestPubSub: truncated realtime message on ${channel} (type=${salvagedType ?? 'unknown'})`);
+          if (!salvagedType || !salvagedRunId) {
+            return;
+          }
+          const salvagedData =
+            salvagedType === 'finish'
+              ? { output: { usage: {}, steps: [] }, stepResult: { reason: 'stop' } }
+              : salvagedType === 'abort'
+                ? { steps: [] }
+                : salvagedType === 'error'
+                  ? {
+                      error: {
+                        name: 'Error',
+                        message: "The run's error event exceeded the realtime message size limit.",
+                      },
+                    }
+                  : null;
+          if (!salvagedData) {
+            return;
+          }
+          const salvagedEvent = {
+            id: crypto.randomUUID(),
+            createdAt: new Date(),
+            type: salvagedType,
+            runId: salvagedRunId,
+            data: salvagedData,
+          } as unknown as Event;
+          for (const callback of callbacks) {
+            callback(salvagedEvent);
+          }
+          return;
+        }
         // For agent stream events, message.data is the full AgentStreamEvent structure (type, runId, data)
         // For workflow events, wrap message.data in a PubSub Event format
         // IMPORTANT: Always generate a unique `id` and `createdAt` for every event.
