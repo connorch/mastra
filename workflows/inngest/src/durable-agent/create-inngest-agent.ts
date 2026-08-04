@@ -41,6 +41,7 @@ import {
   prepareForDurableExecution,
   createDurableAgentStream,
   emitErrorEvent,
+  isAgentStreamTopic,
   runDurableStreamUntilIdle,
   runResumeDurableStreamUntilIdle,
   globalRunRegistry,
@@ -560,7 +561,10 @@ export function createInngestAgent<TOutput = undefined>(options: CreateInngestAg
         _cachingPubsub = innerPubsub;
         _customCache = _customCache ?? mastra?.serverCache;
       } else {
-        _cachingPubsub = new CachingPubSub(innerPubsub, resolveCache());
+        // Only agent-stream topics are ever replayed from cache (observe()
+        // reconnects, subscribeWithReplay); everything else stays live-only so
+        // multi-megabyte workflow watch events aren't retained in the cache.
+        _cachingPubsub = new CachingPubSub(innerPubsub, resolveCache(), { shouldCache: isAgentStreamTopic });
       }
     }
     return _cachingPubsub;
@@ -579,7 +583,13 @@ export function createInngestAgent<TOutput = undefined>(options: CreateInngestAg
     // Ensure the agent's CachingPubSub (and its cache) is resolved so workflow
     // events and agent.stream events share the same history backend.
     getPubsub();
-    return new CachingPubSub(defaultPubsub, resolveCache());
+    // Cache only agent-stream topics. This factory pubsub also carries the
+    // workflow's own watch events (`workflow.events.v2.*`), which can be
+    // megabytes per event and are never replayed from history - caching them
+    // retains the whole run's payload in memory (with the default in-memory
+    // cache, inside the serving process) for the cache TTL and can exhaust
+    // memory-constrained runtimes such as 128 MB Cloudflare Workers isolates.
+    return new CachingPubSub(defaultPubsub, resolveCache(), { shouldCache: isAgentStreamTopic });
   });
 
   // Lazily resolve cache

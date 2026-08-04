@@ -115,7 +115,14 @@ export {
 } from './stream-adapter';
 
 // Constants
-export { AGENT_STREAM_TOPIC, AgentStreamEventTypes, DurableAgentDefaults, DurableStepIds } from './constants';
+export {
+  AGENT_STREAM_TOPIC,
+  AGENT_STREAM_TOPIC_PREFIX,
+  isAgentStreamTopic,
+  AgentStreamEventTypes,
+  DurableAgentDefaults,
+  DurableStepIds,
+} from './constants';
 
 // Types
 export type {

@@ -994,4 +994,40 @@ describe('CachingPubSub', () => {
       expect(ackedByConsumer).toEqual([1, 1]);
     });
   });
+
+  describe('shouldCache', () => {
+    it('skips the cache for excluded topics but still delivers live', async () => {
+      const filtered = new CachingPubSub(innerPubsub, cache, {
+        shouldCache: topic => topic.startsWith('agent.stream.'),
+      });
+
+      const liveEvents: Event[] = [];
+      await filtered.subscribe('workflow.events.v2.run-1', event => {
+        liveEvents.push(event);
+      });
+
+      await filtered.publish('workflow.events.v2.run-1', { type: 'watch', runId: 'run-1', data: { big: true } });
+      await filtered.publish('agent.stream.run-1', { type: 'chunk', runId: 'run-1', data: { text: 'hi' } });
+
+      expect(liveEvents).toHaveLength(1);
+      expect(liveEvents[0]!.id).toBeDefined();
+      expect(liveEvents[0]!.createdAt).toBeInstanceOf(Date);
+      // Uncached events carry no index (matches the counter-failure path).
+      expect(liveEvents[0]!.index).toBeUndefined();
+
+      // Excluded topic: no cached history, no counter key.
+      expect(await filtered.getHistory('workflow.events.v2.run-1')).toHaveLength(0);
+      expect(await cache.get('pubsub:workflow.events.v2.run-1:counter')).toBeUndefined();
+
+      // Included topic: cached and replayable as before.
+      const history = await filtered.getHistory('agent.stream.run-1');
+      expect(history).toHaveLength(1);
+      expect(history[0]!.index).toBe(0);
+    });
+
+    it('caches everything when no predicate is configured', async () => {
+      await cachingPubsub.publish('workflow.events.v2.run-2', { type: 'watch', runId: 'run-2', data: {} });
+      expect(await cachingPubsub.getHistory('workflow.events.v2.run-2')).toHaveLength(1);
+    });
+  });
 });

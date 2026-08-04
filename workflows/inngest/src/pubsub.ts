@@ -177,7 +177,7 @@ export class InngestPubSub extends PubSub {
     // Await the subscribe call to ensure the WebSocket connection is established
     // before we consider the subscription "ready". This prevents race conditions
     // where the workflow triggers before the subscription can receive events.
-    const stream = await subscribe(
+    const subscription = await subscribe(
       {
         channel,
         topics: [inngestTopic],
@@ -246,10 +246,23 @@ export class InngestPubSub extends PubSub {
       },
     );
 
+    // The SDK delivers every message to the callback via its own internal
+    // stream AND fans it out to this returned stream. Nothing here ever reads
+    // the returned stream, so without cancelling it every message on the
+    // channel is retained in its write queue for the life of the subscription.
+    // For a durable agent run that is the entire event payload of the run -
+    // enough to exhaust a 128 MB Cloudflare Workers isolate on long streams.
+    // cancel() detaches only this unread branch; callback delivery continues.
+    void Promise.resolve(subscription.cancel()).catch(() => {});
+
     this.subscriptions.set(topic, {
       unsubscribe: () => {
         try {
-          void stream.cancel();
+          // close() tears down the underlying WebSocket subscription. Plain
+          // cancel() would only detach the (already-cancelled) returned
+          // stream and leave the socket connected (and parsing messages)
+          // until process exit.
+          subscription.close('unsubscribed');
         } catch (err) {
           console.error('InngestPubSub unsubscribe error:', err);
         }
