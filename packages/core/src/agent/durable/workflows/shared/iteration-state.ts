@@ -105,5 +105,8 @@ export function createBaseIterationStateUpdate(input: IterationStateUpdateInput)
     // Carry span identity forward unchanged so every iteration shares one trace.
     agentSpanData: currentState.agentSpanData,
     modelSpanData: currentState.modelSpanData,
+    // Keep the serialized request context across iterations so dynamic
+    // getModel/getToolsForExecution resolvers still see it on iteration 2+.
+    requestContextEntries: currentState.requestContextEntries,
   };
 }
