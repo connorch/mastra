@@ -37,6 +37,41 @@ function parseTopic(topic: string): { runId: string; topicType: 'workflow' | 'ag
   return null;
 }
 
+// PATCH(walton): realtime transports cap message size (~512KB on the dev
+// server and Inngest Cloud), and an oversized publish is DELIVERED TRUNCATED
+// as a raw string subscribers cannot parse. A truncated terminal event would
+// leave every attached stream open forever (the durable stream only closes on
+// finish/error/abort), so slim the LIVE copy of the known-huge lifecycle
+// events to the fields stream consumers actually read: the finish converter
+// reads only stepResult.reason and output.usage, and step-start's `request`
+// (the full model request) is never enqueued to observers at all. The
+// CachingPubSub cache is written before this publish and keeps the full
+// event for replays.
+const REALTIME_AGENT_EVENT_SOFT_LIMIT_CHARS = 400_000;
+function slimOversizedAgentEvent(event: any): any {
+  let serializedLength: number;
+  try {
+    serializedLength = JSON.stringify(event)?.length ?? 0;
+  } catch {
+    return event;
+  }
+  if (serializedLength <= REALTIME_AGENT_EVENT_SOFT_LIMIT_CHARS) return event;
+  if (event?.type === 'finish') {
+    return {
+      ...event,
+      data: {
+        output: { usage: event.data?.output?.usage },
+        stepResult: { reason: event.data?.stepResult?.reason },
+      },
+    };
+  }
+  if (event?.type === 'step-start') {
+    const { request: _request, ...rest } = event.data ?? {};
+    return { ...event, data: rest };
+  }
+  return event;
+}
+
 /**
  * PubSub implementation for Inngest workflows.
  *
@@ -95,7 +130,7 @@ export class InngestPubSub extends PubSub {
     try {
       // For agent stream events, send the full event structure so subscribers can access type/runId/data
       // For workflow events, send just the data (existing behavior)
-      const dataToSend = topicType === 'agent' ? event : event.data;
+      const dataToSend = topicType === 'agent' ? slimOversizedAgentEvent(event) : event.data;
       await this.inngest.realtime.publish(buildTopicRef(channel, inngestTopic), dataToSend);
     } catch (err: any) {
       // For agent stream terminal events, rethrow — losing a finish/error event
@@ -149,6 +184,38 @@ export class InngestPubSub extends PubSub {
         app: this.inngest,
       },
       (message: any) => {
+        // PATCH(walton): a message over the realtime size cap arrives
+        // truncated as a raw JSON string. Salvage terminal events (type and
+        // runId serialize first, inside the surviving head) into minimal
+        // envelopes so attached streams still close; drop everything else —
+        // the CachingPubSub cache carries the full copy for replays.
+        if (topicType === 'agent' && typeof message.data === 'string') {
+          const head = message.data.slice(0, 4096);
+          const salvagedType = /"type"\s*:\s*"([^"]+)"/.exec(head)?.[1];
+          const salvagedRunId = /"runId"\s*:\s*"([^"]+)"/.exec(head)?.[1];
+          console.warn(`InngestPubSub: truncated realtime message on ${channel} (type=${salvagedType ?? 'unknown'})`);
+          if (!salvagedType || !salvagedRunId) return;
+          const salvagedData =
+            salvagedType === 'finish'
+              ? { output: { usage: {} }, stepResult: { reason: 'stop' } }
+              : salvagedType === 'abort'
+                ? { steps: [] }
+                : salvagedType === 'error'
+                  ? { error: { message: "The run's error event exceeded the realtime message size limit." } }
+                  : null;
+          if (!salvagedData) return;
+          const salvagedEvent = {
+            id: crypto.randomUUID(),
+            createdAt: new Date(),
+            type: salvagedType,
+            runId: salvagedRunId,
+            data: salvagedData,
+          } as unknown as Event;
+          for (const callback of callbacks) {
+            callback(salvagedEvent);
+          }
+          return;
+        }
         // For agent stream events, message.data is the full AgentStreamEvent structure (type, runId, data)
         // For workflow events, wrap message.data in a PubSub Event format
         // IMPORTANT: Always generate a unique `id` and `createdAt` for every event.

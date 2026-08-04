@@ -198,10 +198,11 @@ describe('InngestExecutionEngine.executeWorkflowStep', () => {
       runId: nestedRunId,
     });
     expect(invoke).toHaveBeenCalledTimes(1);
+    // PATCH(walton): stepResults intentionally omitted from the invoke payload —
+    // the child workflow handler rehydrates them from its own snapshot.
     expect(invoke.mock.calls[0]?.[1].data.resume).toEqual({
       runId: nestedRunId,
       steps: [suspendedStep.id],
-      stepResults: nestedStepResults,
       resumePayload,
       resumePath: [1, 0],
     });

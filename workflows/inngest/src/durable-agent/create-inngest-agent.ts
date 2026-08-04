@@ -45,8 +45,10 @@ import {
   runResumeDurableStreamUntilIdle,
   globalRunRegistry,
 } from '@mastra/core/agent/durable';
+import { DurableStepIds } from '@mastra/core/agent/durable';
 import type { AgentStepFinishEventData, AgentSuspendedEventData } from '@mastra/core/agent/durable';
 import type { MessageListInput } from '@mastra/core/agent/message-list';
+import type { RequestContext } from '@mastra/core/request-context';
 import { InMemoryServerCache } from '@mastra/core/cache';
 import type { MastraServerCache } from '@mastra/core/cache';
 import { CachingPubSub } from '@mastra/core/events';
@@ -261,6 +263,13 @@ export interface InngestAgentStreamResult<OUTPUT = undefined> {
 export interface InngestAgentResumeOptions<OUTPUT = undefined> {
   threadId?: string;
   resourceId?: string;
+  /**
+   * PATCH(walton): request context shipped with the resume event, merged
+   * over the snapshot's persisted context. The durable loop rebuilds each
+   * step execution's RequestContext from the event payload, and suspended
+   * snapshots persist no context — the resuming request must re-supply it.
+   */
+  requestContext?: RequestContext;
   onChunk?: (chunk: ChunkType<OUTPUT>) => void | Promise<void>;
   onStepFinish?: (result: AgentStepFinishEventData) => void | Promise<void>;
   onFinish?: MastraOnFinishCallback<OUTPUT>;
@@ -980,28 +989,43 @@ export function createInngestAgent<TOutput = undefined>(options: CreateInngestAg
 
           // Find the suspended step from the snapshot
           const suspendedStepIds = snapshot?.suspendedPaths ? Object.keys(snapshot.suspendedPaths) : [];
-          const steps = suspendedStepIds.length > 0 ? suspendedStepIds : [];
+          // PATCH(walton): a suspend()-based tool suspension is NESTED — the
+          // loop snapshot's suspendedPaths names only its execution step,
+          // while the resume must reach that workflow's tool-call step (the
+          // handler forwards steps.slice(1) to the nested workflow, and the
+          // Inngest engine never records resumeLabels to resolve the leaf
+          // from). A top-level-only path restarts the iteration WITHOUT
+          // delivering the tool result — the model re-runs its turn and asks
+          // again. Target the nested tool-call leaf explicitly.
+          const steps = suspendedStepIds.length > 0 ? [suspendedStepIds[0]!, DurableStepIds.TOOL_CALL] : [];
 
           await inngest.send({
             name: eventName,
             data: {
               inputData: resumeData,
-              initialState: snapshot?.value ?? {},
               runId,
               resourceId: resumeOptions?.resourceId,
-              requestContext: snapshot?.requestContext ?? {},
-              stepResults: snapshot?.context,
+              // PATCH(walton): merge a caller-supplied request context over the
+              // snapshot's persisted one. The durable loop rebuilds each step
+              // execution's RequestContext from this event payload, and
+              // suspended snapshots persist no context — the resuming request
+              // must re-supply what it re-derives from its own auth.
+              requestContext: {
+                ...(snapshot?.requestContext ?? {}),
+                ...(resumeOptions?.requestContext ? Object.fromEntries(resumeOptions.requestContext.entries()) : {}),
+              },
+              // PATCH(walton): resume ships state BY REFERENCE — no
+              // initialState/stepResults copies (the top-level one was dead
+              // weight; the nested one is rehydrated by the workflow handler
+              // from this same snapshot). Keeps the event O(resumeData) at any
+              // conversation size (Inngest 3 MiB event limit).
               resume: {
                 steps,
-                stepResults: snapshot?.context,
                 resumePayload: resumeData,
                 resumePath: steps[0] ? snapshot?.suspendedPaths?.[steps[0]] : undefined,
               },
             },
           });
-        })
-        .catch(error => {
-          void emitError(runId, error);
         });
 
       existingEntry.workflowExecution = workflowExecution;
@@ -1016,6 +1040,19 @@ export function createInngestAgent<TOutput = undefined>(options: CreateInngestAg
         streamCleanup();
         finalizeResumeRegistry();
       };
+
+      // PATCH(walton): await the dispatch so send-time failures (snapshot
+      // store down, Inngest unreachable) reject this call — releasing the
+      // just-opened stream — instead of being converted into a terminal
+      // stream error event, which would mark a still-parked run errored and
+      // unresumable. The stream attached before dispatch, so a successful
+      // send misses no continuation events.
+      try {
+        await workflowExecution;
+      } catch (error) {
+        cleanup();
+        throw error;
+      }
 
       return {
         output,

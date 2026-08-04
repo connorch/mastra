@@ -1,6 +1,6 @@
 {
   "name": "@cchevli/inngest",
-  "version": "1.8.4-alpha.1",
+  "version": "1.8.4-alpha.2",
   "description": "Mastra Inngest integration",
   "type": "module",
   "main": "dist/index.js",

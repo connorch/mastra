@@ -569,13 +569,16 @@ export class InngestRun<
         name: `workflow.${this.workflowId}`,
         data: {
           inputData: resumeDataToUse,
-          initialState: snapshot?.value ?? {},
           runId: this.runId,
           workflowId: this.workflowId,
-          stepResults: snapshot?.context as any,
+          // PATCH(walton): resume ships state BY REFERENCE. The suspended
+          // snapshot (stepResults + initialState) already lives in this
+          // workflow's own storage, so the handler rehydrates it there by
+          // runId instead of receiving multi-MB copies through Inngest's
+          // 3 MiB event limit. Keeps the resume event O(resumeData) at any
+          // conversation size.
           resume: {
             steps,
-            stepResults: snapshot?.context as any,
             resumePayload: resumeDataToUse,
             resumePath: steps?.[0] ? (snapshot?.suspendedPaths?.[steps?.[0]] as any) : undefined,
           },

@@ -556,7 +556,10 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
             resume: {
               runId: runId,
               steps: nestedResumeSteps,
-              stepResults: snapshot?.context as any,
+              // PATCH(walton): omit stepResults — the child is an InngestWorkflow
+              // whose handler rehydrates them from its own snapshot (same
+              // workflowName/runId this load used), so the suspended state never
+              // rides the invoke payload.
               resumePayload: resume.resumePayload,
               resumePath: nestedResumeStepId ? (snapshot?.suspendedPaths?.[nestedResumeStepId] as any) : undefined,
             },
