@@ -14,6 +14,7 @@ import { z } from 'zod/v4';
 import { createTool } from '../../tools';
 import { WORKSPACE_TOOLS } from '../constants';
 import { FileNotFoundError, WorkspaceReadOnlyError } from '../errors';
+import { importExternal } from '../import-external';
 import { emitWorkspaceMetadata, getEditDiagnosticsText, requireFilesystem } from './helpers';
 import { startWorkspaceSpan } from './tracing';
 
@@ -69,7 +70,7 @@ let loadingPromise: Promise<AstGrepModule | null> | undefined;
 
 /**
  * Try to load @ast-grep/napi. Returns null if not available.
- * Uses dynamic import to avoid compile-time dependency.
+ * Uses {@link importExternal} so bundlers never resolve this native addon at build time.
  * Concurrent callers share the same in-flight promise.
  */
 export async function loadAstGrep(): Promise<AstGrepModule | null> {
@@ -79,9 +80,7 @@ export async function loadAstGrep(): Promise<AstGrepModule | null> {
   if (!loadingPromise) {
     loadingPromise = (async () => {
       try {
-        // Dynamic import with string concatenation to prevent bundlers from resolving at build time
-        const moduleName = '@ast-grep' + '/napi';
-        const mod = await import(/* @vite-ignore */ /* webpackIgnore: true */ moduleName);
+        const mod = await importExternal<AstGrepModule>('@ast-grep/napi');
         astGrepModule = { parse: mod.parse, Lang: mod.Lang };
         return astGrepModule;
       } catch {
