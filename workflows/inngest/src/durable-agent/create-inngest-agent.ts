@@ -57,6 +57,7 @@ import type { MastraModelOutput, ChunkType, FullOutput, MastraOnFinishCallback }
 import type { Workflow } from '@mastra/core/workflows';
 import type { Inngest } from 'inngest';
 
+import { workflowEventName } from '../event-names';
 import { InngestPubSub } from '../pubsub';
 import type { InngestWorkflow } from '../workflow';
 import { createInngestDurableAgenticWorkflow, InngestDurableStepIds } from './create-inngest-agentic-workflow';
@@ -588,7 +589,7 @@ export function createInngestAgent<TOutput = undefined>(options: CreateInngestAg
     workflowInput: any,
     tracingOptions?: { traceId: string; parentSpanId: string },
   ): Promise<void> {
-    const eventName = `workflow.${InngestDurableStepIds.AGENTIC_LOOP}`;
+    const eventName = workflowEventName(inngest, InngestDurableStepIds.AGENTIC_LOOP);
 
     await inngest.send({
       name: eventName,
@@ -968,7 +969,7 @@ export function createInngestAgent<TOutput = undefined>(options: CreateInngestAg
       // Load the workflow snapshot to build proper resume data
       // This mirrors InngestRun._resume() which loads the snapshot, finds the suspended step,
       // and sends an event to the same trigger name (not a .resume suffix)
-      const eventName = `workflow.${InngestDurableStepIds.AGENTIC_LOOP}`;
+      const eventName = workflowEventName(inngest, InngestDurableStepIds.AGENTIC_LOOP);
 
       const workflowExecution = ready
         .then(async () => {
