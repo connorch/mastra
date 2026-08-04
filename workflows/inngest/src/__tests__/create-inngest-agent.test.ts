@@ -7,7 +7,12 @@
  */
 
 import { Agent } from '@mastra/core/agent';
-import { AGENT_STREAM_TOPIC, AgentStreamEventTypes, globalRunRegistry } from '@mastra/core/agent/durable';
+import {
+  AGENT_STREAM_TOPIC,
+  AgentStreamEventTypes,
+  DurableStepIds,
+  globalRunRegistry,
+} from '@mastra/core/agent/durable';
 import { InMemoryServerCache } from '@mastra/core/cache';
 import { CachingPubSub, EventEmitterPubSub } from '@mastra/core/events';
 import { Mastra } from '@mastra/core/mastra';
@@ -690,6 +695,187 @@ describe('InngestAgent parity surface', () => {
       );
     } finally {
       result.cleanup();
+      sendSpy.mockRestore();
+    }
+  });
+
+  it('targets the nested tool-call leaf in the resume event for a suspended tool', async () => {
+    // A suspend()-based tool suspension is nested: the loop snapshot's
+    // suspendedPaths names only the outer execution step, but the resume
+    // event must address the tool-call step inside that workflow. A
+    // top-level-only path restarts the iteration without delivering the tool
+    // result.
+    const durableAgent = makeIsolatedAgent('parity-resume-leaf-target');
+    const sendSpy = stubInngestSend();
+    const runId = 'resume-leaf-target-run';
+    const outerStepId = InngestDurableStepIds.AGENTIC_EXECUTION;
+    const loadWorkflowSnapshot = vi.fn().mockResolvedValue({
+      value: {},
+      context: {},
+      suspendedPaths: { [outerStepId]: [outerStepId, 0] },
+      requestContext: {},
+    });
+    const mastra = {
+      getStorage: () => ({
+        getStore: async () => ({ loadWorkflowSnapshot }),
+      }),
+    };
+    (durableAgent as any).__setMastra(mastra);
+
+    const result = await durableAgent.resume(runId, { answer: 'approved' });
+    try {
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            resume: expect.objectContaining({
+              steps: [outerStepId, DurableStepIds.TOOL_CALL],
+              resumePath: [outerStepId, 0],
+            }),
+          }),
+        }),
+      );
+    } finally {
+      result.cleanup();
+      sendSpy.mockRestore();
+    }
+  });
+
+  it('ships accumulated state by reference: no state copies in the resume event', async () => {
+    // For a durable agent the loop snapshot's context is the cumulative
+    // agentic-loop state (message list, accumulated steps, tool results), so
+    // copying it into the resume event is what pushes the payload past
+    // Inngest's event size limit as a conversation grows. The event must
+    // carry no `initialState`, no top-level `stepResults` and no
+    // `resume.stepResults`; the workflow handler rehydrates all of it from
+    // this same snapshot by runId (covered by resume-event-rehydration.test.ts,
+    // whose `resume.stepResults == null` branch this event now takes).
+    const durableAgent = makeIsolatedAgent('parity-resume-state-by-reference');
+    const sendSpy = stubInngestSend();
+    const runId = 'resume-state-by-reference-run';
+    const outerStepId = InngestDurableStepIds.AGENTIC_EXECUTION;
+    // A snapshot carrying real accumulated state, so a regression that ships
+    // copies is visible as payload content rather than only as payload size.
+    const accumulatedContext = {
+      input: { messages: [{ role: 'user', content: 'hi' }] },
+      [outerStepId]: {
+        status: 'suspended',
+        payload: { messageList: ['turn-1', 'turn-2', 'turn-3'] },
+      },
+    };
+    const accumulatedState = { iteration: 3, pendingToolCallId: 'call-1' };
+    const loadWorkflowSnapshot = vi.fn().mockResolvedValue({
+      value: accumulatedState,
+      context: accumulatedContext,
+      suspendedPaths: { [outerStepId]: [outerStepId, 0] },
+      requestContext: { organizationId: 'org-1' },
+    });
+    const mastra = {
+      getStorage: () => ({
+        getStore: async () => ({ loadWorkflowSnapshot }),
+      }),
+    };
+    (durableAgent as any).__setMastra(mastra);
+
+    const requestContext = new RequestContext();
+    requestContext.set('sessionToken', 'fresh-token');
+
+    const result = await durableAgent.resume(runId, { answer: 'approved' }, { requestContext });
+    try {
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const data = (sendSpy.mock.calls[0]![0] as any).data;
+
+      // No copies of the accumulated state ride the event.
+      expect(data).not.toHaveProperty('initialState');
+      expect(data).not.toHaveProperty('stepResults');
+      expect(data.resume).not.toHaveProperty('stepResults');
+      expect(JSON.stringify(data)).not.toContain('turn-3');
+      expect(JSON.stringify(data)).not.toContain('pendingToolCallId');
+
+      // Everything the handler cannot re-derive from the snapshot is intact.
+      expect(data.runId).toBe(runId);
+      expect(data.inputData).toEqual({ answer: 'approved' });
+      expect(data.requestContext).toEqual({ organizationId: 'org-1', sessionToken: 'fresh-token' });
+      expect(data.resume).toEqual({
+        steps: [outerStepId, DurableStepIds.TOOL_CALL],
+        resumePayload: { answer: 'approved' },
+        resumePath: [outerStepId, 0],
+      });
+    } finally {
+      result.cleanup();
+      sendSpy.mockRestore();
+    }
+  });
+
+  it('merges a caller-supplied requestContext over the snapshot context in the resume event', async () => {
+    const durableAgent = makeIsolatedAgent('parity-resume-request-context-merge');
+    const sendSpy = stubInngestSend();
+    const runId = 'resume-request-context-merge-run';
+    const loadWorkflowSnapshot = vi.fn().mockResolvedValue({
+      value: {},
+      context: {},
+      suspendedPaths: { 'agentic-loop': ['agentic-loop'] },
+      requestContext: {
+        userId: 'user-from-snapshot',
+        organizationId: 'org-1',
+      },
+    });
+    const mastra = {
+      getStorage: () => ({
+        getStore: async () => ({ loadWorkflowSnapshot }),
+      }),
+    };
+    (durableAgent as any).__setMastra(mastra);
+
+    const requestContext = new RequestContext();
+    requestContext.set('userId', 'user-from-caller');
+    requestContext.set('sessionToken', 'fresh-token');
+
+    const result = await durableAgent.resume(runId, { answer: 'approved' }, { requestContext });
+    try {
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            requestContext: {
+              // Caller entries win over the snapshot's...
+              userId: 'user-from-caller',
+              sessionToken: 'fresh-token',
+              // ...while snapshot entries the caller didn't override survive.
+              organizationId: 'org-1',
+            },
+          }),
+        }),
+      );
+    } finally {
+      result.cleanup();
+      sendSpy.mockRestore();
+    }
+  });
+
+  it('rejects resume() and clears the registry entry when the event send fails', async () => {
+    // The dispatch is awaited: a send-time failure (snapshot store down,
+    // Inngest unreachable) must reject the resume() call and tear down the
+    // just-created registry entry, not leave the caller's stream hanging
+    // with a live registry slot.
+    const durableAgent = makeIsolatedAgent('parity-resume-send-failure');
+    const sendSpy = vi.spyOn(inngest as any, 'send').mockRejectedValue(new Error('inngest send failed'));
+    const runId = 'resume-send-failure-run';
+    const loadWorkflowSnapshot = vi.fn().mockResolvedValue({
+      value: {},
+      context: {},
+      suspendedPaths: { 'agentic-loop': ['agentic-loop'] },
+      requestContext: {},
+    });
+    const mastra = {
+      getStorage: () => ({
+        getStore: async () => ({ loadWorkflowSnapshot }),
+      }),
+    };
+    (durableAgent as any).__setMastra(mastra);
+
+    try {
+      await expect(durableAgent.resume(runId, { answer: 'approved' })).rejects.toThrow('inngest send failed');
+      expect(globalRunRegistry.get(runId)).toBeUndefined();
+    } finally {
       sendSpy.mockRestore();
     }
   });
