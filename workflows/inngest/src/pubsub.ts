@@ -46,7 +46,7 @@ function parseTopic(topic: string): { runId: string; topicType: 'workflow' | 'ag
 // and terminate correctly:
 // - `finish`: drop `output.steps`, the unbounded per-step accumulator (each
 //   entry carries full tool results and model content). If the event is
-//   still over the limit on accumulated text alone, drop `output.text` too —
+//   still over the limit on accumulated text alone, drop `output.text` too -
 //   `output.usage` and `stepResult` (whose `reason` closes the stream and
 //   routes abort/error callbacks) always survive.
 // - `step-start`: blank `request`, the full model request body, which grows
@@ -211,7 +211,7 @@ export class InngestPubSub extends PubSub {
         // JSON string. Salvage terminal events into minimal envelopes so
         // attached streams still close (`type` and `runId` serialize first,
         // inside the surviving head; the real payload is lost in the
-        // truncated tail); drop everything else — the CachingPubSub cache
+        // truncated tail); drop everything else - the CachingPubSub cache
         // carries the full copy for replays.
         if (topicType === 'agent' && typeof message.data === 'string') {
           const head = message.data.slice(0, 4096);

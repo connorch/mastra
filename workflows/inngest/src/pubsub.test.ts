@@ -2,7 +2,7 @@
  * Regression tests for InngestPubSub handling of the Inngest Realtime message
  * size cap (~512 KB on the dev server and Inngest Cloud).
  *
- * An oversized publish is not rejected — it is DELIVERED TRUNCATED as a raw
+ * An oversized publish is not rejected - it is DELIVERED TRUNCATED as a raw
  * JSON string subscribers cannot parse. A truncated terminal event leaves
  * every attached durable stream open forever (streams only close on
  * finish/error/abort). Two defenses under test:
