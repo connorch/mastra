@@ -1002,7 +1002,6 @@ export function createInngestAgent<TOutput = undefined>(options: CreateInngestAg
           name: eventName,
           data: {
             inputData: resumeData,
-            initialState: snapshot?.value ?? {},
             runId,
             resourceId: resumeOptions?.resourceId,
             // Merge a caller-supplied request context over the snapshot's
@@ -1014,10 +1013,15 @@ export function createInngestAgent<TOutput = undefined>(options: CreateInngestAg
               ...(snapshot?.requestContext ?? {}),
               ...(resumeOptions?.requestContext ? Object.fromEntries(resumeOptions.requestContext.entries()) : {}),
             },
-            stepResults: snapshot?.context,
+            // The resume event ships state BY REFERENCE. For a durable agent
+            // the snapshot (stepResults + initialState) holds the cumulative
+            // agentic-loop state (message list, accumulated steps, tool
+            // results), and it already lives in this workflow's own storage,
+            // so the handler rehydrates it there by runId instead of receiving
+            // copies through Inngest's event size limit. Keeps the resume event
+            // O(resumeData) at any conversation size.
             resume: {
               steps,
-              stepResults: snapshot?.context,
               resumePayload: resumeData,
               resumePath: steps[0] ? snapshot?.suspendedPaths?.[steps[0]] : undefined,
             },
