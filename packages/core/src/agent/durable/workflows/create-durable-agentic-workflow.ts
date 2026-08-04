@@ -188,6 +188,9 @@ export function createDurableAgenticWorkflow(options?: DurableAgenticWorkflowOpt
           stepIndex: state.iterationCount,
           agentSpanData: state.agentSpanData,
           modelSpanData: state.modelSpanData,
+          // Forward the serialized request context to the LLM step so dynamic
+          // model/tool resolvers see the run's context cross-isolate.
+          requestContextEntries: state.requestContextEntries,
         };
       },
       { id: 'map-to-llm-input' },

@@ -107,6 +107,11 @@ export const baseIterationStateSchema = z.object({
   // Span data, carried unchanged so every iteration shares one trace
   agentSpanData: z.any().optional(),
   modelSpanData: z.any().optional(),
+  // JSON-safe request context snapshot, carried across iterations so
+  // cross-isolate durable steps can restore it. Without this the field is
+  // stripped here and `restoreRequestContext(input.requestContextEntries)`
+  // sees undefined on every iteration after the first.
+  requestContextEntries: z.record(z.string(), z.unknown()).optional(),
 });
 
 /**
