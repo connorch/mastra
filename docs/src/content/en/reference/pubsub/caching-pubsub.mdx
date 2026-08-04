@@ -75,6 +75,13 @@ const pubsub = withCaching(new EventEmitterPubSub(), new InMemoryServerCache())
         description: 'Logger for errors. Falls back to `console.error` when omitted.',
         isOptional: true,
       },
+      {
+        name: 'shouldCache',
+        type: '(topic: string) => boolean',
+        description:
+          'Predicate deciding whether events published to a topic are cached for replay. Topics that return `false` publish straight to the inner pub/sub: live delivery works as usual, but `getHistory()` and replay subscriptions return nothing for them. Use this to keep high-volume live-only topics out of the cache. Defaults to caching every topic.',
+        isOptional: true,
+      },
     ],
   },
 ]}
